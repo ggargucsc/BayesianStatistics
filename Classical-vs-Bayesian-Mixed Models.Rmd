@@ -1,0 +1,354 @@
+---
+output: html_document
+---
+Assuming we already know the model--
+comparison is between mixed methods and fully bayesian methods
+
+
+Dataset- "latency"
+response: brush_triggered/duration_min
+Full Model: varying-intercept model only
+
+```{r}
+library(lme4)
+library(arm)
+
+setwd('~/Desktop/Mixed models/project')
+latency = read.csv("master-file.csv")
+#attach(latency)
+
+#recode delay variable
+latency$delay<-ifelse(latency$delay=='hi', 1, 0)
+latency$dataset<-ifelse(latency$dataset=='brightkite', 1, 2)
+latency$dataset<-ifelse(latency$dataset=='brightkite', 1, 2)
+
+
+
+
+
+
+
+
+
+
+
+# mixed method
+lmer_method<-function(y)
+{
+
+#m1 <- lmer(brush_processed/duration_min ~ delay-1+(1|pid_recode),data=latency, REML=FALSE)
+m1 <- lmer(y ~ delay+order+(1|pid)+(1|dataset),data=latency, REML=FALSE)
+
+
+
+par(mfrow=c(2,2))
+plot(fitted(m1), y, xlim=c(range(y)), xlab="Predicted", ylab="Observed", main="lmer method")
+abline(0,1)
+plot(fitted(m1), resid(m1), xlab="Predicted", ylab="Residuals", main="lmer method")
+abline(h=0)
+}
+
+
+
+#what we are doing is not the model comparison, but given a model, how reliable are our estimates from lmer #vs bayesian methods
+#simulating 1000 fake dataset using lmer results for checking uncertaining in the parameter of interest
+######################################################################################################
+
+
+
+
+
+J<-16
+subject<-rep(1:J, each=2)
+
+#between-subject variance
+a.true.var<-15.78
+
+
+delay_true<-33.20
+#intercept<-16.63
+
+n<-nrow(latency)   ##32
+n.fake<-1000
+cover.68 <- rep (NA, n.fake)
+cover.95 <- rep (NA, n.fake)
+
+for (i in 1:n.fake){
+
+  a.true<-rnorm(J, 0, a.true.var)
+  mean<-delay_true*latency$delay+a.true[subject]
+  y<-rnorm(32, mean, 31.78)
+  
+  lmer.fake<-lmer(y~delay-1+(1|pid_recode), data=latency, REML=FALSE)
+  delay.hat<-fixef(lmer.fake)['delay']
+  delay.se<-se.fixef(lmer.fake)['delay']
+  cover.68[i] <- abs (delay_true - delay.hat) < delay.se
+  cover.95[i] <- abs (delay_true - delay.hat) < 2*delay.se
+}
+cat (paste ("68% coverage: ", mean(cover.68), "\n"))
+cat (paste ("95% coverage: ", mean(cover.95), "\n"))
+ 
+
+
+
+
+
+#bayesian method 
+#since every parameter is random in bayesian, we start with a non-informative prior on delay parameter
+#delay is always positive, so a truncated normal with mean 0, and variance 1/(100^2)
+#b<-dnorm(0, 1/(100^2))  b>0 so values between (0, 100)
+
+#next is the prior distribution on subject, for each subject, 
+y<-latency$zoom_triggered/latency$duration_min
+x<-latency$delay
+
+
+update.mu_j<-function(j, sigma2_y, sigma2_a, mu, beta)
+{
+  val1<-2*j
+  val2<-2*j-1
+  sum.y<-y[val1]+y[val2]
+ # print(y)
+  sum.x<-x[val1]+x[val2]
+  
+  m<-((sum.y-beta*sum.x)/sigma2_y)+ (mu/sigma2_a)
+  #print(m)
+  var<-1/((2/sigma2_y)+(1/sigma2_a))
+ # print(var)
+  
+  
+  k<-rnorm(1, mean=m*var, sd=sqrt(var))
+  
+  return(k)
+  
+}
+
+update.mu<-function(mu, sigma2_a)
+{
+  #print(mu)
+  p<-rnorm(1, mean(mu), sd=sqrt(sigma2_a/16))
+  
+  return(p)
+  
+}
+
+update.sigma2_y<-function(beta, mu)
+{
+  sum2<-0
+  
+    for( j in 1:16)
+    {
+      
+      val1<-2*j-1
+     
+     y.tmp<-y[val1]
+     x.tmp<-x[val1]
+     sum2<-sum2+(y.tmp-beta*x.tmp-mu[j])^2
+     val2<-2*j
+     y.tmp<-y[val2]
+     x.tmp<-x[val2]
+     sum2<-sum2+(y.tmp-beta*x.tmp-mu[j])^2 
+     
+    }
+    
+ 
+  
+j<-1/rgamma(1, 15, sum2/2 )
+
+return(j)
+  
+}
+
+update.sigma2_a<-function(mu, mu_a)
+{
+  s<-0
+
+ 
+ #print(mu_a)
+  for( j in 1:16)
+  {
+    temp<-(mu[j]-mu_a)^2
+    s<-s+temp
+    
+    
+  }
+  
+
+  
+ m<- 1/rgamma(1, shape=7, scale=s/2)
+ return(m)
+  
+
+}
+
+update.beta<-function(mu, sigma2_y)
+{
+  sum<-0
+ 
+    for( j in 1:16)
+    {
+      val1<-2*j-1
+     
+     y.tmp<-y[val1]
+     x.tmp<-x[val1]
+     sum<-sum+(y.tmp-mu[j])*x.tmp
+     val2<-2*j
+     y.tmp<-y[val2]
+     x.tmp<-x[val2]
+     sum<-sum+(y.tmp-mu[j])*x.tmp
+    }
+  sum.x<-sum(x^2)
+  
+  c<-rnorm(1, mean=sum/sum.x, sd=sqrt(sigma2_y/sum.x))
+  
+  return (c)
+  
+}
+
+bayesian_mcmc<-function(y)
+{
+
+n.sim<-5000
+
+param<-matrix(0, nrow=n.sim, ncol=4)
+colnames(param)<-c("mu_a","sigma_y", "sigma_a", "beta")
+param[1, 1]<-20
+param[1, 2]<-500
+param[1, 3]<-120
+param[1,4]<-36
+
+param_mu<-matrix(0, nrow=16, ncol=n.sim)
+param_mu[, 1]<-c(11.9, 13.7, 0.0045, -2.05, 7.92, -5.2, -1.2, 6.6, 1.8, 0.16, 27, -2, -3, -4, 2, -1.8)
+
+
+
+for(i in 2:n.sim )
+{
+  for(j in 1:16)
+  {
+  param_mu[j, i]<-update.mu_j(j, sigma2_y=param[i-1, "sigma_y"], sigma2_a=param[i-1, "sigma_a"], mu=param[i-1, "mu_a"], beta=param[i-1, "beta"])
+  
+  }
+  par<-c(param_mu[1, i], param_mu[2, i], param_mu[3, i], param_mu[4, i], param_mu[5, i], param_mu[6, i], param_mu[7, i], param_mu[8, i], param_mu[9, i], param_mu[10, i], param_mu[11, i], param_mu[12, i], param_mu[13, i],param_mu[14, i],param_mu[15, i],param_mu[16, i])
+  param[i, "mu_a"]<-update.mu(par, param[i-1, "sigma_a"])
+  param[i, "sigma_y"]<- update.sigma2_y(beta=param[i-1, "beta"], mu=par)
+  param[i, "sigma_a"]<-update.sigma2_a(mu=par, mu_a=param[i, "mu_a"])
+  param[i, "beta"]<- update.beta(par,param[i, "sigma_y"] )
+
+}
+
+burnin<-1:250
+#apply(param[-burnin, ], 2, mean)
+#apply(param[-burnin, ], 2, quantile, c(0.05, 0.95))
+
+#sqrt(apply(param[250:1000,c(2,3) ], 2, mean))
+#sqrt(apply(param[250:1000, c(2,3)], 2, quantile, c(0.05, 0.95)))
+
+#plot(density(sqrt(param[-burnin, "sigma_y"])))
+
+#plot(density(param[-burnin, "beta"]))
+
+
+
+
+#apply(param_mu[, -burnin], 1, mean)
+
+
+
+
+a<-NULL
+for(i in 1:16)
+a[i]<-median(param_mu[i,-burnin])
+
+b<-median(param[-burnin, "beta"])
+
+y.hat <- a[subject] + b*x 
+y.resid <- y - y.hat
+
+
+#par(mfrow=c(2,2))
+plot(y.hat, y, xlim=c(range(y)), xlab="Predicted", ylab="Observed", main="Bayesian method")
+abline(0,1)
+plot(y.hat, y.resid, xlab="Predicted", ylab="Residuals", main="Bayesian method")
+abline(h=0)
+
+}
+####################################################################################
+
+
+y=latency$brush_processed/latency$duration_min
+lmer_method(y)
+bayesian_mcmc(y)
+
+
+y=latency$pan_processed/latency$duration_min
+lmer_method(y)
+bayesian_mcmc(y)
+
+
+
+y=latency$select_processed/latency$duration_min
+lmer_method(y)
+bayesian_mcmc(y)
+
+
+
+y=latency$zoom_processed/latency$duration_min
+lmer_method(y)
+bayesian_mcmc(y)
+
+
+y=latency$brush_triggered/latency$duration_min
+lmer_method(y)
+bayesian_mcmc(y)
+
+
+y=latency$pan_triggered/latency$duration_min
+lmer_method(y)
+bayesian_mcmc(y)
+
+
+y=latency$zoom_triggered/latency$duration_min
+lmer_method(y)
+bayesian_mcmc(y)
+
+
+y=latency$select_triggered/latency$duration_min
+lmer_method(y)
+bayesian_mcmc(y)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

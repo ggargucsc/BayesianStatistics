@@ -11,7 +11,7 @@ y <- c(4,5,4,1,0,4,3,4,0,6,3,3,4,0,2,6,3,3,5,4,5,3,1,4,4,1,5,5,3,4,2,5,2,2,3,4,2
 n <- length(y)
 
 
-#update function for lamda
+#posterior function for lamda
 update.lamda<-function(m)
 {
   sum.m<-sum(y[1:m])
@@ -20,7 +20,7 @@ update.lamda<-function(m)
   
 }
 
-#update function for phi
+#posterior function for phi
 update.phi<-function(m)
 {
   sum.m<-sum(y[1:m])
@@ -31,6 +31,7 @@ update.phi<-function(m)
 }
 
 #values for m is discrete, using sample function in R to update m 
+#posterior function for m
 update.m<-function(ulamda, uphi)
 {
   unnormal.den.m<-rep(0,n)
@@ -62,6 +63,7 @@ post<-matrix(0, ncol=3, nrow=N.iter)
 colnames(post)<- c("lam", "phi", "m")
 post[1,]<-c(1,1,4)
 
+#gibbs sampling algorithm
 for(i in 2:N.iter)
 {
  post[i-1,"m"]<- update.m(post[i-1,"lam"], post[i-1,"phi"]) 
@@ -75,6 +77,7 @@ for(i in 2:N.iter)
 burnin <- 1:1000
 
 #trace plots for lamda and phi
+#removing first 1000 samples
 plot(post[-burnin,"lam"], type="l", main="Trace plot for lamda")
 plot(post[-burnin,"phi"], type="l", main="Trace plot for phi" )
 
